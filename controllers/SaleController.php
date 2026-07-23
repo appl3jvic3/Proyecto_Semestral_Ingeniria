@@ -11,6 +11,8 @@ class SaleController
     private $promotionModel;
     private $cart;
 
+
+
     public function __construct()
     {
         $db = Database::getInstance();
@@ -29,6 +31,8 @@ class SaleController
      */
     public function catalog()
     {
+        error_log("Llegué a catalog()");
+        echo "<!-- DEPURACIÓN: catalog ejecutado -->";
         $filters = [];
         if (!empty($_GET['category'])) $filters['category'] = $_GET['category'];
         if (!empty($_GET['search'])) $filters['search'] = $_GET['search'];

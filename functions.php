@@ -1,14 +1,17 @@
 <?php
+// Asegurar que BASE_PATH y BASE_URL estén definidas
+if (!defined('BASE_PATH')) {
+    define('BASE_PATH', __DIR__ . '/');
+}
+if (!defined('BASE_URL')) {
+    $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https://' : 'http://';
+    $host = $_SERVER['HTTP_HOST'];
+    $scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
+    define('BASE_URL', $protocol . $host . $scriptDir . '/');
+}
 
-/**
- * Muestra una vista con layout
- * @param string $viewName  Nombre de la vista (sin extensión)
- * @param array  $data      Datos a pasar a la vista
- * @param string $action    Acción (list, create, edit, etc.) para vistas unificadas
- */
 function view($viewName, $data = [], $action = 'list')
 {
-    // Asegurar que $action esté disponible en la vista
     $data['action'] = $action;
     extract($data);
 
@@ -20,7 +23,7 @@ function view($viewName, $data = [], $action = 'list')
     if (file_exists($viewFile)) {
         require_once $viewFile;
     } else {
-        echo "Error: Vista '$viewName' no encontrada";
+        echo "<div class='alert alert-error'>Error: Vista '$viewName' no encontrada</div>";
     }
 
     // Incluir footer
@@ -35,10 +38,7 @@ function redirect($url)
 
 function baseUrl($path = '')
 {
-    $protocol = isset($_SERVER['HTTPS']) ? 'https://' : 'http://';
-    $host = $_SERVER['HTTP_HOST'];
-    $scriptDir = dirname($_SERVER['SCRIPT_NAME']);
-    return $protocol . $host . $scriptDir . '/' . ltrim($path, '/');
+    return BASE_URL . ltrim($path, '/');
 }
 
 function setFlash($type, $message)

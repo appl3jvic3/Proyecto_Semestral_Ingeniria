@@ -1,197 +1,146 @@
 <?php
-class Promotion
+class PromotionController
 {
-    private $db;
+    private $promotionModel;
+    private $productModel;
 
-    public function __construct($db)
+    public function __construct()
     {
-        $this->db = $db;
+        if (!isLoggedIn() || !hasAnyRole(['admin', 'marketing'])) {
+            setFlash('error', 'Acceso denegado');
+            redirect('index.php?controller=dashboard&action=index');
+        }
+        $db = Database::getInstance();
+        $this->promotionModel = new Promotion($db);
+        $this->productModel = new Product($db);
     }
 
-    /**
-     * Obtiene todas las promociones con filtros opcionales
-     * @param array $filters ['status' => 'vigente', 'search' => 'nombre']
-     * @return array Lista de promociones con campo 'product_ids' (string CSV)
-     */
-    public function findAll($filters = [])
+    public function index()
     {
-        $sql = "SELECT p.*, 
-                       COALESCE(GROUP_CONCAT(pp.product_id), '') as product_ids 
-                FROM promotions p 
-                LEFT JOIN promotion_products pp ON p.id = pp.promotion_id 
-                WHERE 1=1";
-        $params = [];
+        $action = $_GET['subaction'] ?? 'list';
+        $data = ['action' => $action];
 
-        if (!empty($filters['status'])) {
-            $sql .= " AND p.status = ?";
-            $params[] = $filters['status'];
+        if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $this->processCreate();
+            return;
         }
 
-        if (!empty($filters['search'])) {
-            $sql .= " AND p.name LIKE ?";
-            $params[] = "%{$filters['search']}%";
+        if ($action === 'edit' && isset($_GET['id'])) {
+            $promotion = $this->promotionModel->findById($_GET['id']);
+            if (!$promotion) {
+                setFlash('error', 'Promoción no encontrada');
+                redirect('index.php?controller=promotion&action=index');
+            }
+            $data['promotion'] = $promotion;
+            $data['product_ids'] = !empty($promotion['product_ids']) ? explode(',', $promotion['product_ids']) : [];
+            $data['all_products'] = $this->productModel->findAll(['status' => 'activo']);
+
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                $this->processUpdate($_GET['id']);
+                return;
+            }
+            view('promotions/index', $data, 'edit');
+            return;
         }
 
-        $sql .= " GROUP BY p.id ORDER BY p.created_at DESC";
-        $stmt = $this->db->query($sql, $params);
-        return $stmt->fetchAll();
+        if ($action === 'delete' && isset($_GET['id'])) {
+            $this->processDelete($_GET['id']);
+            return;
+        }
+
+        // Listado
+        $filters = [];
+        if (!empty($_GET['status'])) $filters['status'] = $_GET['status'];
+        if (!empty($_GET['search'])) $filters['search'] = $_GET['search'];
+
+        $data['promotions'] = $this->promotionModel->findAll($filters);
+        $data['all_products'] = $this->productModel->findAll(['status' => 'activo']);
+        view('promotions/index', $data, 'list');
     }
 
-    /**
-     * Obtiene una promoción por su ID, incluyendo los productos asociados
-     * @param int $id
-     * @return array|false Datos de la promoción o false si no existe
-     */
-    public function findById($id)
+    private function processCreate()
     {
-        $sql = "SELECT p.*, 
-                       COALESCE(GROUP_CONCAT(pp.product_id), '') as product_ids 
-                FROM promotions p 
-                LEFT JOIN promotion_products pp ON p.id = pp.promotion_id 
-                WHERE p.id = ? 
-                GROUP BY p.id";
-        $stmt = $this->db->query($sql, [$id]);
-        return $stmt->fetch();
-    }
+        $name = $_POST['name'] ?? '';
+        $discount = $_POST['discount_percent'] ?? 0;
+        $startDate = $_POST['start_date'] ?? '';
+        $endDate = $_POST['end_date'] ?? '';
+        $description = $_POST['description'] ?? '';
+        $productIds = $_POST['product_ids'] ?? [];
 
-    /**
-     * Obtiene todas las promociones activas (vigentes en la fecha actual)
-     * con sus productos asociados.
-     * @return array Lista de promociones vigentes
-     */
-    public function getActivePromotions()
-    {
-        $now = date('Y-m-d');
-        $sql = "SELECT p.*, 
-                       COALESCE(GROUP_CONCAT(pp.product_id), '') as product_ids 
-                FROM promotions p 
-                LEFT JOIN promotion_products pp ON p.id = pp.promotion_id 
-                WHERE p.status = 'vigente' 
-                  AND p.start_date <= ? 
-                  AND p.end_date >= ? 
-                GROUP BY p.id 
-                ORDER BY p.discount_percent DESC";
-        $stmt = $this->db->query($sql, [$now, $now]);
-        return $stmt->fetchAll();
-    }
+        $errors = [];
+        if (empty($name)) $errors[] = 'Nombre de la promoción es obligatorio';
+        if ($discount <= 0 || $discount > 100) $errors[] = 'El descuento debe ser entre 1 y 100%';
+        if (empty($startDate)) $errors[] = 'Fecha de inicio es obligatoria';
+        if (empty($endDate)) $errors[] = 'Fecha de fin es obligatoria';
+        if ($startDate > $endDate) $errors[] = 'La fecha de inicio no puede ser mayor a la fecha de fin';
+        if (empty($productIds)) $errors[] = 'Debe seleccionar al menos un producto';
 
-    /**
-     * Crea una nueva promoción y asigna los productos seleccionados
-     * @param array $data ['name', 'discount_percent', 'start_date', 'end_date', 'description', 'product_ids']
-     * @return int|false ID de la promoción creada o false en caso de error
-     */
-    public function create($data)
-    {
-        $this->db->query("START TRANSACTION");
+        if (!empty($errors)) {
+            foreach ($errors as $error) setFlash('error', $error);
+            $data = ['action' => 'create', 'all_products' => $this->productModel->findAll(['status' => 'activo'])];
+            view('promotions/index', $data, 'create');
+            return;
+        }
 
-        try {
-            // Calcular estado automáticamente según fechas
-            $now = date('Y-m-d');
-            $status = 'proximo';
-            if ($data['start_date'] <= $now && $data['end_date'] >= $now) {
-                $status = 'vigente';
-            } elseif ($data['end_date'] < $now) {
-                $status = 'vencido';
-            }
+        $data = [
+            'name' => $name,
+            'discount_percent' => $discount,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'description' => $description,
+            'product_ids' => $productIds,
+            'created_by' => $_SESSION['user']['id']
+        ];
 
-            $sql = "INSERT INTO promotions 
-                    (name, discount_percent, start_date, end_date, status, description, created_by) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)";
-            $this->db->query($sql, [
-                $data['name'],
-                $data['discount_percent'],
-                $data['start_date'],
-                $data['end_date'],
-                $status,
-                $data['description'] ?? null,
-                $data['created_by'] ?? $_SESSION['user']['id'] ?? null
-            ]);
-
-            $promotionId = $this->db->lastInsertId();
-
-            // Asignar productos a la promoción
-            if (!empty($data['product_ids']) && is_array($data['product_ids'])) {
-                foreach ($data['product_ids'] as $productId) {
-                    $this->db->query(
-                        "INSERT INTO promotion_products (promotion_id, product_id) VALUES (?, ?)",
-                        [$promotionId, $productId]
-                    );
-                }
-            }
-
-            $this->db->query("COMMIT");
-            return $promotionId;
-        } catch (Exception $e) {
-            $this->db->query("ROLLBACK");
-            return false;
+        if ($this->promotionModel->create($data)) {
+            setFlash('success', 'Promoción creada correctamente');
+            redirect('index.php?controller=promotion&action=index');
+        } else {
+            setFlash('error', 'Error al crear promoción');
+            $data = ['action' => 'create', 'all_products' => $this->productModel->findAll(['status' => 'activo'])];
+            view('promotions/index', $data, 'create');
         }
     }
 
-    /**
-     * Actualiza una promoción existente y sus productos asociados
-     * @param int $id ID de la promoción
-     * @param array $data Campos a actualizar (mismos que en create)
-     * @return bool True si se actualizó correctamente, false en caso de error
-     */
-    public function update($id, $data)
+    private function processUpdate($id)
     {
-        $this->db->query("START TRANSACTION");
+        $name = $_POST['name'] ?? '';
+        $discount = $_POST['discount_percent'] ?? 0;
+        $startDate = $_POST['start_date'] ?? '';
+        $endDate = $_POST['end_date'] ?? '';
+        $description = $_POST['description'] ?? '';
+        $productIds = $_POST['product_ids'] ?? [];
 
-        try {
-            // Calcular estado automáticamente
-            $now = date('Y-m-d');
-            $status = 'proximo';
-            if ($data['start_date'] <= $now && $data['end_date'] >= $now) {
-                $status = 'vigente';
-            } elseif ($data['end_date'] < $now) {
-                $status = 'vencido';
-            }
-
-            $sql = "UPDATE promotions SET 
-                    name = ?, 
-                    discount_percent = ?, 
-                    start_date = ?, 
-                    end_date = ?, 
-                    status = ?, 
-                    description = ? 
-                    WHERE id = ?";
-            $this->db->query($sql, [
-                $data['name'],
-                $data['discount_percent'],
-                $data['start_date'],
-                $data['end_date'],
-                $status,
-                $data['description'] ?? null,
-                $id
-            ]);
-
-            // Reemplazar productos asociados
-            $this->db->query("DELETE FROM promotion_products WHERE promotion_id = ?", [$id]);
-
-            if (!empty($data['product_ids']) && is_array($data['product_ids'])) {
-                foreach ($data['product_ids'] as $productId) {
-                    $this->db->query(
-                        "INSERT INTO promotion_products (promotion_id, product_id) VALUES (?, ?)",
-                        [$id, $productId]
-                    );
-                }
-            }
-
-            $this->db->query("COMMIT");
-            return true;
-        } catch (Exception $e) {
-            $this->db->query("ROLLBACK");
-            return false;
+        if (empty($name) || $discount <= 0 || $discount > 100 || empty($startDate) || empty($endDate) || $startDate > $endDate) {
+            setFlash('error', 'Datos inválidos');
+            redirect('index.php?controller=promotion&action=index&subaction=edit&id=' . $id);
+            return;
         }
+
+        $data = [
+            'name' => $name,
+            'discount_percent' => $discount,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'description' => $description,
+            'product_ids' => $productIds
+        ];
+
+        if ($this->promotionModel->update($id, $data)) {
+            setFlash('success', 'Promoción actualizada correctamente');
+        } else {
+            setFlash('error', 'Error al actualizar promoción');
+        }
+        redirect('index.php?controller=promotion&action=index');
     }
 
-    /**
-     * Elimina una promoción (borrado físico, con cascada a promotion_products)
-     * @param int $id
-     * @return bool True si se eliminó correctamente
-     */
-    public function delete($id)
+    private function processDelete($id)
     {
-        return $this->db->query("DELETE FROM promotions WHERE id = ?", [$id]);
+        if ($this->promotionModel->delete($id)) {
+            setFlash('success', 'Promoción eliminada correctamente');
+        } else {
+            setFlash('error', 'Error al eliminar promoción');
+        }
+        redirect('index.php?controller=promotion&action=index');
     }
 }

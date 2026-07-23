@@ -3,7 +3,7 @@ define('DB_HOST', 'localhost');
 define('DB_NAME', 'universe_zero');
 define('DB_USER', 'root');
 define('DB_PASS', '');
-define('BASE_URL', 'http://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/') . '/');
+
 class Database
 {
     private static $instance = null;
@@ -23,10 +23,6 @@ class Database
     {
         if (self::$instance === null) self::$instance = new self();
         return self::$instance;
-    }
-    public function getConnection()
-    {
-        return $this->pdo;
     }
     public function query($sql, $params = [])
     {

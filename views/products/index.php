@@ -1,8 +1,3 @@
-<?php
-
-
-?>
-
 <?php if ($action === 'list'): ?>
     <div class="products-container">
         <h2>Gestión de Inventario</h2>

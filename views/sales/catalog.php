@@ -1,5 +1,6 @@
 <div class="catalog">
     <h2>Catálogo de Productos</h2>
+    
 
     <div class="filters">
         <form method="GET" class="filter-form">
